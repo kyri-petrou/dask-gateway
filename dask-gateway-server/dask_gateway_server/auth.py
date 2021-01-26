@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
-from traitlets import Unicode, Integer, default, Instance
+from traitlets import Unicode, Integer, default, Instance, List
 from traitlets.config import LoggingConfigurable
 
 from .models import User
@@ -316,6 +316,25 @@ class JupyterHubAuthenticator(Authenticator):
             raise ValueError("JUPYTERHUB_API_URL must be set")
         return out
 
+    whitelisted_users = List(
+        help="""
+        Define a subset of Jupyterhub users names that are allowed to connect to the
+        Gateway
+
+        By default, all users authenticated with Jupyterhub are allowed to connect.
+        """,
+        config=True,
+    )
+
+    whitelisted_groups = List(
+        help="""
+        Define only a subset of groups that are allowed to connect to the Gateway
+
+        By default, all users authenticated with Jupyterhub are allowed to connect.
+        """,
+        config=True,
+    )
+
     tls_key = Unicode(
         "",
         help="""
@@ -390,6 +409,7 @@ class JupyterHubAuthenticator(Authenticator):
 
         if resp.status < 400:
             data = await resp.json()
+            self._check_whitelist(data)
             return User(data["name"], groups=data["groups"], admin=data["admin"])
         elif resp.status == 404:
             self.log.debug("Token for non-existant user requested")
@@ -412,3 +432,19 @@ class JupyterHubAuthenticator(Authenticator):
                 "%s - code: %s, reason: %s", err.reason, resp.status, resp.reason
             )
             raise err
+
+    def _check_whitelist(self, data):
+        """If whitelisted users or groups have been defined, raise an error if the
+        user does not belong in either of the lists. Admins are excepted from this rule
+        """
+        if data["admin"]:
+            return None
+
+        if self.whitelisted_users or self.whitelisted_groups:
+            if not (
+                data["name"] in self.whitelisted_users
+                or any(group in data["groups"] for group in self.whitelisted_groups)
+            ):
+                raise unauthorized("jupyterhub")
+
+        return None
